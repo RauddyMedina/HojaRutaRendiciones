@@ -1,0 +1,781 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Marcador de Rendiciones · OPL</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@700;800&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<style>
+  :root {
+    --bg: #0a0f1e;
+    --surface: #111827;
+    --surface2: #1a2235;
+    --border: #1f2d45;
+    --accent: #00d4ff;
+    --accent2: #ff6b35;
+    --accent3: #00ff88;
+    --text: #e8eef8;
+    --text2: #8899bb;
+    --danger: #ff4757;
+    --warning: #ffa502;
+    --success: #2ed573;
+    --radius: 12px;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'DM Sans', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(0,212,255,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,212,255,0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .container {
+    position: relative;
+    z-index: 1;
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 20px 16px 80px;
+  }
+
+  .header {
+    text-align: center;
+    padding: 32px 0 28px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 28px;
+  }
+
+  .header-badge {
+    display: inline-block;
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--accent);
+    border: 1px solid rgba(0,212,255,0.3);
+    padding: 4px 12px;
+    border-radius: 20px;
+    margin-bottom: 12px;
+  }
+
+  h1 {
+    font-family: 'Syne', sans-serif;
+    font-size: 26px;
+    font-weight: 800;
+    letter-spacing: -0.5px;
+    line-height: 1.2;
+    color: var(--text);
+    margin-bottom: 6px;
+  }
+
+  .subtitle {
+    font-size: 13px;
+    color: var(--text2);
+  }
+
+  /* ── Cards / Steps ── */
+  .step-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px 22px;
+    margin-bottom: 16px;
+    transition: border-color 0.2s;
+  }
+
+  .step-card.active {
+    border-color: rgba(0,212,255,0.4);
+  }
+
+  .step-label {
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .step-num {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    background: rgba(0,212,255,0.15);
+    border: 1px solid rgba(0,212,255,0.4);
+    border-radius: 50%;
+    font-size: 10px;
+    color: var(--accent);
+    flex-shrink: 0;
+  }
+
+  .step-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 14px;
+  }
+
+  /* ── Input row ── */
+  .input-row {
+    display: flex;
+    gap: 10px;
+    align-items: stretch;
+  }
+
+  input[type="text"] {
+    flex: 1;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-family: 'DM Mono', monospace;
+    font-size: 12px;
+    padding: 10px 14px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+
+  input[type="text"]:focus {
+    border-color: var(--accent);
+  }
+
+  input[type="text"]::placeholder {
+    color: var(--text2);
+  }
+
+  /* ── Buttons ── */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 18px;
+    border-radius: 8px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    border: none;
+    transition: all 0.2s;
+    white-space: nowrap;
+  }
+
+  .btn-primary {
+    background: var(--accent);
+    color: #0a0f1e;
+  }
+
+  .btn-primary:hover { background: #22e0ff; }
+  .btn-primary:disabled { opacity: 0.4; cursor: default; }
+
+  .btn-success {
+    background: var(--accent3);
+    color: #0a0f1e;
+  }
+
+  .btn-success:hover { background: #22ff9a; }
+  .btn-success:disabled { opacity: 0.4; cursor: default; }
+
+  .btn-ghost {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text2);
+    font-size: 12px;
+    padding: 7px 14px;
+  }
+
+  .btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* ── Status pill ── */
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    padding: 5px 12px;
+    border-radius: 20px;
+    margin-top: 12px;
+  }
+
+  .status-pill.ok {
+    background: rgba(46,213,115,0.12);
+    border: 1px solid rgba(46,213,115,0.3);
+    color: var(--success);
+  }
+
+  .status-pill.error {
+    background: rgba(255,71,87,0.12);
+    border: 1px solid rgba(255,71,87,0.3);
+    color: var(--danger);
+  }
+
+  .status-pill.loading {
+    background: rgba(0,212,255,0.1);
+    border: 1px solid rgba(0,212,255,0.3);
+    color: var(--accent);
+  }
+
+  .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+  }
+
+  .dot.pulse {
+    animation: pulse 1s infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+
+  /* ── Patente summary chips ── */
+  .patente-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 10px;
+  }
+
+  .chip {
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 3px 8px;
+    color: var(--text2);
+  }
+
+  /* ── Drop zone ── */
+  .drop-zone {
+    border: 2px dashed var(--border);
+    border-radius: var(--radius);
+    padding: 32px 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s;
+    background: var(--surface2);
+    margin-bottom: 14px;
+  }
+
+  .drop-zone:hover, .drop-zone.drag-over {
+    border-color: var(--accent);
+    background: rgba(0,212,255,0.04);
+  }
+
+  .drop-icon {
+    font-size: 28px;
+    margin-bottom: 8px;
+    opacity: 0.6;
+  }
+
+  .drop-text {
+    font-size: 13px;
+    color: var(--text2);
+  }
+
+  .drop-text strong {
+    color: var(--accent);
+  }
+
+  input[type="file"] { display: none; }
+
+  /* ── File list ── */
+  .file-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .file-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 13px;
+  }
+
+  .file-icon {
+    font-size: 18px;
+    flex-shrink: 0;
+  }
+
+  .file-name {
+    flex: 1;
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .file-count {
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    color: var(--text2);
+    flex-shrink: 0;
+  }
+
+  .file-badge {
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    flex-shrink: 0;
+  }
+
+  .file-badge.matched {
+    background: rgba(46,213,115,0.15);
+    border: 1px solid rgba(46,213,115,0.3);
+    color: var(--success);
+  }
+
+  .file-badge.none {
+    background: rgba(136,153,187,0.1);
+    border: 1px solid var(--border);
+    color: var(--text2);
+  }
+
+  .btn-dl {
+    background: transparent;
+    border: 1px solid rgba(0,212,255,0.3);
+    color: var(--accent);
+    padding: 5px 12px;
+    border-radius: 6px;
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    cursor: pointer;
+    transition: all 0.2s;
+    flex-shrink: 0;
+  }
+
+  .btn-dl:hover { background: rgba(0,212,255,0.1); }
+
+  /* ── Process row ── */
+  .process-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 6px;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .summary-text {
+    font-size: 13px;
+    color: var(--text2);
+  }
+
+  .summary-text strong {
+    color: var(--accent3);
+  }
+
+  /* ── Remove btn ── */
+  .btn-remove {
+    background: none;
+    border: none;
+    color: var(--text2);
+    cursor: pointer;
+    font-size: 14px;
+    padding: 2px 4px;
+    border-radius: 4px;
+    transition: color 0.2s;
+    flex-shrink: 0;
+  }
+
+  .btn-remove:hover { color: var(--danger); }
+
+  /* ── Divider ── */
+  .divider {
+    height: 1px;
+    background: var(--border);
+    margin: 6px 0 14px;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <div class="header">
+    <div class="header-badge">OPL · Hela Transyanez</div>
+    <h1>Marcador de Rendiciones</h1>
+    <div class="subtitle">Cruza hojas de ruta con la pestaña rendiciones y marca la columna Obs</div>
+  </div>
+
+  <!-- PASO 1: Fuente de rendiciones -->
+  <div class="step-card" id="card1">
+    <div class="step-label">
+      <span class="step-num">1</span>
+      Fuente de datos
+    </div>
+    <div class="step-title">URL del Google Apps Script</div>
+    <div class="input-row">
+      <input type="text" id="gasUrl" placeholder="https://script.google.com/macros/s/.../exec" value="https://script.google.com/macros/s/AKfycbwJfNbheZ_bafnTrOtDzyzFK00aK9IOXpeTLtSB0oNeWc51F64Dln07rMCVRb2nPPCHrw/exec" />
+      <button class="btn btn-primary" id="btnCargar" onclick="cargarRendiciones()">Cargar datos</button>
+    </div>
+    <div id="statusRendiciones"></div>
+    <div id="patenteChips" class="patente-chips" style="display:none"></div>
+  </div>
+
+  <!-- PASO 2: Subir hojas de ruta -->
+  <div class="step-card" id="card2">
+    <div class="step-label">
+      <span class="step-num">2</span>
+      Hojas de ruta
+    </div>
+    <div class="step-title">Sube los archivos Excel de las rutas</div>
+
+    <div class="drop-zone" id="dropZone" onclick="document.getElementById('fileInput').click()"
+      ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event)">
+      <div class="drop-icon">📂</div>
+      <div class="drop-text">
+        <strong>Arrastra los Excel aquí</strong> o haz clic para seleccionar<br>
+        <span style="font-size:11px; margin-top:4px; display:block;">Puedes subir múltiples archivos a la vez</span>
+      </div>
+    </div>
+    <input type="file" id="fileInput" accept=".xlsx,.xls" multiple onchange="onFileSelect(event)">
+
+    <div class="file-list" id="fileList"></div>
+  </div>
+
+  <!-- PASO 3: Procesar -->
+  <div class="step-card" id="card3">
+    <div class="step-label">
+      <span class="step-num">3</span>
+      Procesar y descargar
+    </div>
+    <div class="step-title">Marca la columna Obs y descarga los Excel</div>
+
+    <div class="process-row">
+      <div class="summary-text" id="summaryText">Carga rendiciones y sube archivos para comenzar</div>
+      <button class="btn btn-success" id="btnProcesar" onclick="procesarTodo()" disabled>Procesar todo</button>
+    </div>
+
+    <div id="resultList" style="margin-top:14px; display:flex; flex-direction:column; gap:8px;"></div>
+  </div>
+
+</div>
+
+<script>
+// ── Estado global ──────────────────────────────────────────────
+let rendicionesMap = {};
+let archivos = [];
+
+// ── Paso 1: Cargar rendiciones desde GAS ──────────────────────
+async function cargarRendiciones() {
+  const url = document.getElementById('gasUrl').value.trim();
+  if (!url) return mostrarStatus('statusRendiciones', 'Ingresa la URL del GAS', 'error');
+  const btn = document.getElementById('btnCargar');
+  btn.disabled = true;
+  mostrarStatus('statusRendiciones', 'Cargando...', 'loading');
+  document.getElementById('patenteChips').style.display = 'none';
+  try {
+    const res = await fetch(url + '?action=mapa');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const json = await res.json();
+    if (json.error) throw new Error(json.error);
+    rendicionesMap = json.mapa || {};
+    const total = json.total || Object.keys(rendicionesMap).length;
+    const porPatente = {};
+    Object.values(rendicionesMap).forEach(p => { porPatente[p] = (porPatente[p] || 0) + 1; });
+    const patentes = Object.keys(porPatente).sort();
+    mostrarStatus('statusRendiciones',
+      `✓ ${total} rendición${total !== 1 ? 'es' : ''} cargada${total !== 1 ? 's' : ''} · ${patentes.length} patente${patentes.length !== 1 ? 's' : ''}`, 'ok');
+    const chips = document.getElementById('patenteChips');
+    chips.innerHTML = patentes.map(p => `<span class="chip">${p}: ${porPatente[p]}</span>`).join('');
+    chips.style.display = 'flex';
+    document.getElementById('card1').classList.add('active');
+    actualizarBtnProcesar();
+  } catch (err) {
+    mostrarStatus('statusRendiciones', '✕ ' + err.message, 'error');
+  }
+  btn.disabled = false;
+}
+
+// ── Paso 2: Manejo de archivos ─────────────────────────────────
+function onDragOver(e) { e.preventDefault(); document.getElementById('dropZone').classList.add('drag-over'); }
+function onDragLeave(e) { document.getElementById('dropZone').classList.remove('drag-over'); }
+function onDrop(e) {
+  e.preventDefault();
+  document.getElementById('dropZone').classList.remove('drag-over');
+  agregarArchivos(e.dataTransfer.files);
+}
+function onFileSelect(e) { agregarArchivos(e.target.files); e.target.value = ''; }
+
+function agregarArchivos(fileList) {
+  Array.from(fileList).forEach(file => {
+    if (!file.name.match(/\.(xlsx)$/i)) return;
+    if (archivos.find(a => a.name === file.name)) return;
+    const reader = new FileReader();
+    reader.onload = function(ev) {
+      const rawData = new Uint8Array(ev.target.result);
+      const wb = XLSX.read(rawData, { type: 'array' });
+      const pedidos = contarPedidos(wb);
+      archivos.push({ name: file.name, rawData, pedidos, resultData: null });
+      renderizarArchivos();
+      actualizarBtnProcesar();
+    };
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+function contarPedidos(wb) {
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+  const hi = rows.findIndex(r => r.some(c => String(c).trim() === 'Pedido'));
+  if (hi === -1) return 0;
+  let count = 0;
+  for (let i = hi + 1; i < rows.length; i++) {
+    if (String(rows[i][1] || '').trim()) count++;
+  }
+  return count;
+}
+
+function quitarArchivo(idx) {
+  archivos.splice(idx, 1);
+  renderizarArchivos();
+  actualizarBtnProcesar();
+  document.getElementById('resultList').innerHTML = '';
+}
+
+function renderizarArchivos() {
+  const list = document.getElementById('fileList');
+  if (archivos.length === 0) { list.innerHTML = ''; return; }
+  list.innerHTML = archivos.map((a, i) => `
+    <div class="file-item">
+      <span class="file-icon">📄</span>
+      <span class="file-name" title="${a.name}">${a.name}</span>
+      <span class="file-count">${a.pedidos} pedido${a.pedidos !== 1 ? 's' : ''}</span>
+      <button class="btn-remove" onclick="quitarArchivo(${i})" title="Quitar">✕</button>
+    </div>`).join('');
+  document.getElementById('card2').classList.add('active');
+}
+
+// ── Paso 3: Procesar ──────────────────────────────────────────
+function actualizarBtnProcesar() {
+  const ok = Object.keys(rendicionesMap).length > 0 && archivos.length > 0;
+  document.getElementById('btnProcesar').disabled = !ok;
+  if (ok) document.getElementById('summaryText').innerHTML =
+    `<strong>${archivos.length}</strong> archivo${archivos.length !== 1 ? 's' : ''} listo${archivos.length !== 1 ? 's' : ''} · haz clic en <em>Procesar todo</em>`;
+}
+
+async function procesarTodo() {
+  const btn = document.getElementById('btnProcesar');
+  btn.disabled = true;
+  btn.textContent = 'Procesando...';
+  const resultList = document.getElementById('resultList');
+  resultList.innerHTML = '';
+  let totalMarcadas = 0;
+  for (let i = 0; i < archivos.length; i++) {
+    const a = archivos[i];
+    const { resultData, marcadas } = await procesarExcel(a.rawData);
+    a.resultData = resultData;
+    totalMarcadas += marcadas;
+    const badgeClass = marcadas > 0 ? 'matched' : 'none';
+    const badgeText  = marcadas > 0 ? `${marcadas} marcada${marcadas !== 1 ? 's' : ''}` : 'sin rendiciones';
+    resultList.insertAdjacentHTML('beforeend', `
+      <div class="file-item" id="result-${i}">
+        <span class="file-icon">${marcadas > 0 ? '✅' : '📄'}</span>
+        <span class="file-name" title="${a.name}">${a.name}</span>
+        <span class="file-badge ${badgeClass}">${badgeText}</span>
+        <button class="btn-dl" onclick="descargar(${i})">⬇ Descargar</button>
+      </div>`);
+  }
+  document.getElementById('summaryText').innerHTML =
+    `Procesado: <strong>${totalMarcadas}</strong> celda${totalMarcadas !== 1 ? 's' : ''} marcada${totalMarcadas !== 1 ? 's' : ''} en ${archivos.length} archivo${archivos.length !== 1 ? 's' : ''}`;
+  document.getElementById('card3').classList.add('active');
+  btn.disabled = false;
+  btn.textContent = 'Procesar todo';
+}
+
+// ── Procesar Excel con JSZip (preserva formato 100%) ──────────
+async function procesarExcel(rawData) {
+  // 1. SheetJS solo para leer posiciones de celdas
+  const wb = XLSX.read(rawData, { type: 'array' });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+
+  const headerRowIdx = rows.findIndex(r => r.some(c => String(c).trim() === 'Pedido'));
+  if (headerRowIdx === -1) return { resultData: rawData, marcadas: 0 };
+
+  const headerRow = rows[headerRowIdx];
+  const colPedido = headerRow.findIndex(c => String(c).trim() === 'Pedido');
+  const colObs    = headerRow.findIndex(c => String(c).trim() === 'Obs');
+  if (colPedido === -1 || colObs === -1) return { resultData: rawData, marcadas: 0 };
+
+  const obsColLetter = XLSX.utils.encode_col(colObs); // ej: "K"
+
+  // Mapa de celda → valor: { "K7": "RINDE KLDS81", ... }
+  const cellUpdates = {};
+  let marcadas = 0;
+  for (let r = headerRowIdx + 1; r < rows.length; r++) {
+    const pedido = String(rows[r][colPedido] || '').trim();
+    if (!pedido) continue;
+    const patente = rendicionesMap[pedido];
+    if (!patente) continue;
+    cellUpdates[`${obsColLetter}${r + 1}`] = `RINDE ${patente}`;
+    marcadas++;
+  }
+
+  if (marcadas === 0) return { resultData: rawData, marcadas: 0 };
+
+  // 2. JSZip: modificar el XML directamente sin tocar estilos
+  const zip = await JSZip.loadAsync(rawData);
+
+  // Agregar strings al sharedStrings.xml
+  const valores = [...new Set(Object.values(cellUpdates))];
+  const stringIndices = await actualizarSharedStrings(zip, valores);
+
+  // Modificar el worksheet XML
+  const wsPath = 'xl/worksheets/sheet1.xml';
+  let wsXml = await zip.file(wsPath).async('string');
+  wsXml = aplicarCambios(wsXml, cellUpdates, stringIndices);
+  zip.file(wsPath, wsXml);
+
+  const resultBuffer = await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE', compressionOptions: { level: 6 } });
+  return { resultData: resultBuffer, marcadas };
+}
+
+async function actualizarSharedStrings(zip, valores) {
+  const ssPath = 'xl/sharedStrings.xml';
+  let ssXml = '';
+  const ssFile = zip.file(ssPath);
+  if (ssFile) ssXml = await ssFile.async('string');
+
+  // Extraer strings existentes
+  const siBlocks = [];
+  const siRegex = /<si>[\s\S]*?<\/si>/g;
+  let m;
+  while ((m = siRegex.exec(ssXml)) !== null) siBlocks.push(m[0]);
+
+  // Agregar nuevos strings y registrar índices
+  const indices = {};
+  for (const val of valores) {
+    const escaped = val.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const si = `<si><t>${escaped}</t></si>`;
+    const existIdx = siBlocks.findIndex(b => b.includes(`<t>${escaped}</t>`) || b.includes(`<t xml:space="preserve">${escaped}</t>`));
+    if (existIdx >= 0) {
+      indices[val] = existIdx;
+    } else {
+      indices[val] = siBlocks.length;
+      siBlocks.push(si);
+    }
+  }
+
+  // Reconstruir sharedStrings.xml
+  const total = siBlocks.length;
+  let newSsXml;
+  if (ssXml) {
+    newSsXml = ssXml.replace(/<sst([^>]*)>[\s\S]*<\/sst>/, `<sst$1>${siBlocks.join('')}</sst>`);
+    newSsXml = newSsXml.replace(/count="\d+"/, `count="${total}"`).replace(/uniqueCount="\d+"/, `uniqueCount="${total}"`);
+  } else {
+    newSsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="${total}" uniqueCount="${total}">${siBlocks.join('')}</sst>`;
+  }
+  zip.file(ssPath, newSsXml);
+  return indices;
+}
+
+function aplicarCambios(wsXml, cellUpdates, stringIndices) {
+  for (const [cellRef, valor] of Object.entries(cellUpdates)) {
+    const idx = stringIndices[valor];
+    const colLetter = cellRef.match(/[A-Z]+/)[0];
+    const rowNum    = cellRef.match(/\d+/)[0];
+
+    // Celda existente con contenido: <c r="K7" ...>...</c>
+    const reExist = new RegExp(`<c r="${cellRef}"([^>]*)>[\\s\\S]*?<\\/c>`);
+    // Celda vacía auto-cerrada: <c r="K7" .../>
+    const reEmpty = new RegExp(`<c r="${cellRef}"([^>]*?)\\s*\\/>`);
+
+    if (reExist.test(wsXml)) {
+      wsXml = wsXml.replace(reExist, (_, attrs) => {
+        const cleanAttrs = attrs.replace(/\s*t="[^"]*"/, '');
+        return `<c r="${cellRef}"${cleanAttrs} t="s"><v>${idx}</v></c>`;
+      });
+    } else if (reEmpty.test(wsXml)) {
+      wsXml = wsXml.replace(reEmpty, (_, attrs) => {
+        const cleanAttrs = attrs.replace(/\s*t="[^"]*"/, '');
+        return `<c r="${cellRef}"${cleanAttrs} t="s"><v>${idx}</v></c>`;
+      });
+    } else {
+      // Celda no existe en el XML: insertarla dentro de su fila
+      wsXml = insertarCelda(wsXml, cellRef, colLetter, rowNum, idx);
+    }
+  }
+  return wsXml;
+}
+
+function insertarCelda(wsXml, cellRef, colLetter, rowNum, strIdx) {
+  const reRow = new RegExp(`(<row[^>]*\\br="${rowNum}"[^>]*>)([\\s\\S]*?)(<\\/row>)`);
+  return wsXml.replace(reRow, (_, open, content, close) => {
+    const newCell = `<c r="${cellRef}" t="s"><v>${strIdx}</v></c>`;
+    // Insertar en orden de columna
+    const reCells = /<c r="([A-Z]+)\d+"[^>]*(?:\/>|>[\s\S]*?<\/c>)/g;
+    let insertAt = content.length;
+    let mc;
+    while ((mc = reCells.exec(content)) !== null) {
+      if (mc[1] > colLetter) { insertAt = mc.index; break; }
+    }
+    return open + content.slice(0, insertAt) + newCell + content.slice(insertAt) + close;
+  });
+}
+
+function descargar(idx) {
+  const a = archivos[idx];
+  if (!a.resultData) return;
+  const blob = new Blob([a.resultData], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = a.name;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+// ── Helper UI ─────────────────────────────────────────────────
+function mostrarStatus(id, msg, tipo) {
+  const el = document.getElementById(id);
+  el.innerHTML = `
+    <div class="status-pill ${tipo}">
+      <span class="dot ${tipo === 'loading' ? 'pulse' : ''}"></span>
+      ${msg}
+    </div>`;
+}
+
+// Permitir Enter en el input URL
+document.getElementById('gasUrl').addEventListener('keydown', e => {
+  if (e.key === 'Enter') cargarRendiciones();
+});
+
+// Cargar automáticamente al abrir
+window.addEventListener('load', () => cargarRendiciones());
+</script>
+</body>
+</html>
