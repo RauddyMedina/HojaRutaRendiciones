@@ -618,7 +618,6 @@ async function procesarTodo() {
 
 // ── Procesar Excel con JSZip (preserva formato 100%) ──────────
 async function procesarExcel(rawData) {
-  // 1. SheetJS solo para leer posiciones de celdas
   const wb = XLSX.read(rawData, { type: 'array' });
   const ws = wb.Sheets[wb.SheetNames[0]];
   const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
@@ -631,9 +630,11 @@ async function procesarExcel(rawData) {
   const colObs    = headerRow.findIndex(c => String(c).trim() === 'Obs');
   if (colPedido === -1 || colObs === -1) return { resultData: rawData, marcadas: 0 };
 
-  const obsColLetter = XLSX.utils.encode_col(colObs); // ej: "K"
+  const range = XLSX.utils.decode_range(ws['!ref'] || 'A1:Z200');
+  const startCol = range.s.c;
+  const startRow = range.s.r;
+  const obsColLetter = XLSX.utils.encode_col(startCol + colObs);
 
-  // Mapa de celda → valor: { "K7": "RINDE KLDS81", ... }
   const cellUpdates = {};
   let marcadas = 0;
   for (let r = headerRowIdx + 1; r < rows.length; r++) {
@@ -641,110 +642,144 @@ async function procesarExcel(rawData) {
     if (!pedido) continue;
     const patente = rendicionesMap[pedido];
     if (!patente) continue;
-    cellUpdates[`${obsColLetter}${r + 1}`] = `RINDE ${patente}`;
+    const excelRow = startRow + r + 1;
+    cellUpdates[`${obsColLetter}${excelRow}`] = `RINDE ${patente}`;
     marcadas++;
   }
 
   if (marcadas === 0) return { resultData: rawData, marcadas: 0 };
 
-  // 2. JSZip: modificar el XML directamente sin tocar estilos
   const zip = await JSZip.loadAsync(rawData);
+  const wsPath = await detectarWsPath(zip);
+  if (!wsPath) return { resultData: rawData, marcadas: 0 };
 
-  // Agregar strings al sharedStrings.xml
-  const valores = [...new Set(Object.values(cellUpdates))];
-  const stringIndices = await actualizarSharedStrings(zip, valores);
-
-  // Modificar el worksheet XML
-  const wsPath = 'xl/worksheets/sheet1.xml';
   let wsXml = await zip.file(wsPath).async('string');
-  wsXml = aplicarCambios(wsXml, cellUpdates, stringIndices);
-  zip.file(wsPath, wsXml);
+  const { xml: xmlMod } = aplicarCambios(wsXml, cellUpdates);
+  zip.file(wsPath, xmlMod);
 
   const resultBuffer = await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE', compressionOptions: { level: 6 } });
   return { resultData: resultBuffer, marcadas };
 }
 
-async function actualizarSharedStrings(zip, valores) {
-  const ssPath = 'xl/sharedStrings.xml';
-  let ssXml = '';
-  const ssFile = zip.file(ssPath);
-  if (ssFile) ssXml = await ssFile.async('string');
-
-  // Extraer strings existentes
-  const siBlocks = [];
-  const siRegex = /<si>[\s\S]*?<\/si>/g;
-  let m;
-  while ((m = siRegex.exec(ssXml)) !== null) siBlocks.push(m[0]);
-
-  // Agregar nuevos strings y registrar índices
-  const indices = {};
-  for (const val of valores) {
-    const escaped = val.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    const si = `<si><t>${escaped}</t></si>`;
-    const existIdx = siBlocks.findIndex(b => b.includes(`<t>${escaped}</t>`) || b.includes(`<t xml:space="preserve">${escaped}</t>`));
-    if (existIdx >= 0) {
-      indices[val] = existIdx;
-    } else {
-      indices[val] = siBlocks.length;
-      siBlocks.push(si);
+// ── Detecta la ruta real del primer worksheet ─────────────────
+async function detectarWsPath(zip) {
+  try {
+    const relsXml = await zip.file('xl/_rels/workbook.xml.rels').async('string');
+    // Iterar cada elemento Relationship buscando el de tipo worksheet
+    const relRe = /<Relationship\s[^>]+>/g;
+    let m;
+    while ((m = relRe.exec(relsXml)) !== null) {
+      const rel = m[0];
+      if (!rel.includes('/worksheet')) continue;
+      const tgt = rel.match(/Target="([^"]+)"/);
+      if (tgt) {
+        const t = tgt[1];
+        return t.startsWith('/') ? t.slice(1) : `xl/${t}`;
+      }
     }
+  } catch (_) {}
+  // Fallback directo
+  for (const p of ['xl/worksheets/sheet1.xml', 'xl/worksheets/Sheet1.xml']) {
+    if (zip.file(p)) return p;
   }
-
-  // Reconstruir sharedStrings.xml
-  const total = siBlocks.length;
-  let newSsXml;
-  if (ssXml) {
-    newSsXml = ssXml.replace(/<sst([^>]*)>[\s\S]*<\/sst>/, `<sst$1>${siBlocks.join('')}</sst>`);
-    newSsXml = newSsXml.replace(/count="\d+"/, `count="${total}"`).replace(/uniqueCount="\d+"/, `uniqueCount="${total}"`);
-  } else {
-    newSsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="${total}" uniqueCount="${total}">${siBlocks.join('')}</sst>`;
-  }
-  zip.file(ssPath, newSsXml);
-  return indices;
+  return null;
 }
 
-function aplicarCambios(wsXml, cellUpdates, stringIndices) {
+// ── Modifica el XML del worksheet usando indexOf (sin regex) ──
+function aplicarCambios(wsXml, cellUpdates) {
+  const log = [];
   for (const [cellRef, valor] of Object.entries(cellUpdates)) {
-    const idx = stringIndices[valor];
+    const escaped = valor.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const colLetter = cellRef.match(/[A-Z]+/)[0];
     const rowNum    = cellRef.match(/\d+/)[0];
 
-    // Celda existente con contenido: <c r="K7" ...>...</c>
-    const reExist = new RegExp(`<c r="${cellRef}"([^>]*)>[\\s\\S]*?<\\/c>`);
-    // Celda vacía auto-cerrada: <c r="K7" .../>
-    const reEmpty = new RegExp(`<c r="${cellRef}"([^>]*?)\\s*\\/>`);
+    // Buscar la celda por su atributo r="cellRef"
+    const needle = `r="${cellRef}"`;
+    const cStart = wsXml.indexOf('<c ' + needle);
+    const cStart2 = wsXml.indexOf('<c ' + needle.replace('"', '" '));
 
-    if (reExist.test(wsXml)) {
-      wsXml = wsXml.replace(reExist, (_, attrs) => {
-        const cleanAttrs = attrs.replace(/\s*t="[^"]*"/, '');
-        return `<c r="${cellRef}"${cleanAttrs} t="s"><v>${idx}</v></c>`;
-      });
-    } else if (reEmpty.test(wsXml)) {
-      wsXml = wsXml.replace(reEmpty, (_, attrs) => {
-        const cleanAttrs = attrs.replace(/\s*t="[^"]*"/, '');
-        return `<c r="${cellRef}"${cleanAttrs} t="s"><v>${idx}</v></c>`;
-      });
+    // indexOf puede encontrar tanto `<c r="K7"` como `<c s="1" r="K7"`
+    // Buscamos la posición donde está el tag <c que contiene r="cellRef"
+    let tagPos = -1;
+    let search = 0;
+    while (search < wsXml.length) {
+      const pos = wsXml.indexOf(needle, search);
+      if (pos === -1) break;
+      // Retroceder hasta el < de apertura del tag <c
+      let back = pos - 1;
+      while (back >= 0 && wsXml[back] !== '<') back--;
+      if (back >= 0 && wsXml.slice(back, back + 2) === '<c') {
+        tagPos = back;
+        break;
+      }
+      search = pos + 1;
+    }
+
+    if (tagPos !== -1) {
+      // Encontramos el <c ...> — ahora encontrar su fin
+      const tagEnd = wsXml.indexOf('>', tagPos);
+      if (tagEnd !== -1) {
+        const isSelfClose = wsXml[tagEnd - 1] === '/';
+        const openTag = wsXml.slice(tagPos, tagEnd + 1);
+        const styleM = openTag.match(/\bs="(\d+)"/);
+        const styleAttr = styleM ? ` s="${styleM[1]}"` : '';
+        const newCell = `<c r="${cellRef}"${styleAttr} t="inlineStr"><is><t>${escaped}</t></is></c>`;
+
+        if (isSelfClose) {
+          wsXml = wsXml.slice(0, tagPos) + newCell + wsXml.slice(tagEnd + 1);
+          log.push(`[OK-self] ${cellRef}`);
+        } else {
+          const closeTag = '</c>';
+          const closePos = wsXml.indexOf(closeTag, tagEnd);
+          if (closePos !== -1) {
+            wsXml = wsXml.slice(0, tagPos) + newCell + wsXml.slice(closePos + closeTag.length);
+            log.push(`[OK-open] ${cellRef}`);
+          } else {
+            log.push(`[ERR] ${cellRef} sin </c>`);
+          }
+        }
+      }
     } else {
-      // Celda no existe en el XML: insertarla dentro de su fila
-      wsXml = insertarCelda(wsXml, cellRef, colLetter, rowNum, idx);
+      // Celda no existe en el XML → insertar en la fila
+      log.push(`[INSERT] ${cellRef}`);
+      wsXml = insertarCelda(wsXml, cellRef, colLetter, rowNum, escaped);
     }
   }
-  return wsXml;
+  return { xml: wsXml, log };
 }
 
-function insertarCelda(wsXml, cellRef, colLetter, rowNum, strIdx) {
-  const reRow = new RegExp(`(<row[^>]*\\br="${rowNum}"[^>]*>)([\\s\\S]*?)(<\\/row>)`);
-  return wsXml.replace(reRow, (_, open, content, close) => {
-    const newCell = `<c r="${cellRef}" t="s"><v>${strIdx}</v></c>`;
-    // Insertar en orden de columna
-    const reCells = /<c r="([A-Z]+)\d+"[^>]*(?:\/>|>[\s\S]*?<\/c>)/g;
-    let insertAt = content.length;
-    let mc;
-    while ((mc = reCells.exec(content)) !== null) {
-      if (mc[1] > colLetter) { insertAt = mc.index; break; }
+function insertarCelda(wsXml, cellRef, colLetter, rowNum, escapedValor) {
+  const newCell = `<c r="${cellRef}" t="inlineStr"><is><t>${escapedValor}</t></is></c>`;
+  // Buscar la fila con r="rowNum"
+  const rowNeedle = `r="${rowNum}"`;
+  let search = 0;
+  while (search < wsXml.length) {
+    const pos = wsXml.indexOf(rowNeedle, search);
+    if (pos === -1) break;
+    // Retroceder al < del tag
+    let back = pos - 1;
+    while (back >= 0 && wsXml[back] !== '<') back--;
+    if (back >= 0 && wsXml.slice(back, back + 4) === '<row') {
+      const tagEnd = wsXml.indexOf('>', back);
+      if (tagEnd === -1) break;
+      const rowClose = '</row>';
+      const rowClosePos = wsXml.indexOf(rowClose, tagEnd);
+      if (rowClosePos === -1) break;
+      const rowContent = wsXml.slice(tagEnd + 1, rowClosePos);
+      // Punto de inserción: antes del primer <c con col > colLetter
+      const cellPosRe = /<c [^>]*r="([A-Z]+)\d+"/g;
+      let insertAt = rowContent.length;
+      let cm;
+      while ((cm = cellPosRe.exec(rowContent)) !== null) {
+        if (cm[1] > colLetter) { insertAt = cm.index; break; }
+      }
+      const newContent = rowContent.slice(0, insertAt) + newCell + rowContent.slice(insertAt);
+      wsXml = wsXml.slice(0, tagEnd + 1) + newContent + rowClose + wsXml.slice(rowClosePos + rowClose.length);
+      return wsXml;
     }
-    return open + content.slice(0, insertAt) + newCell + content.slice(insertAt) + close;
-  });
+    search = pos + 1;
+  }
+  return wsXml;
 }
 
 function descargar(idx) {
