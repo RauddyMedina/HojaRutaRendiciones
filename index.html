@@ -480,6 +480,7 @@
     </div>
 
     <div id="resultList" style="margin-top:14px; display:flex; flex-direction:column; gap:8px;"></div>
+    <div id="panelCargas" style="margin-top:14px; display:none;"></div>
   </div>
 
 </div>
@@ -487,7 +488,71 @@
 <script>
 // ── Estado global ──────────────────────────────────────────────
 let rendicionesMap = {};
+let planificado = {};     // pedido -> {carga, ruta, patente}
 let archivos = [];
+
+/* ===== CRUCE-CARGAS-INICIO (lo extrae test_cruce_cargas.js: no renombrar) ===== */
+// Una carga de Easy se "activa" en hela y de ahí salen las hojas de ruta. Si no se
+// activa, sus pedidos igual quedan en Beetrack, así que la única señal es que no
+// aparecen en ninguna hoja. Esto compara lo planificado contra lo que traen las hojas.
+//
+//   planificado = {pedido: {carga, ruta, patente}}   (del GAS, action=planificado)
+//   hojas       = [{patente, pedidos:[...]}, ...]    (los Excel bajados de hela)
+//
+// Paris viaja con carga null y queda afuera: el Nro Carga sólo existe en la base del
+// WMS. Decisión del dueño el 02-10.
+function cruzarCargas(planificado, hojas) {
+  const UMBRAL_A_MEDIAS = 0.2;        // si se ve menos del 20%, quedó a medias
+
+  const vistos = new Set();
+  const conHoja = new Set();
+  for (const h of hojas) {
+    if (h.patente) conHoja.add(String(h.patente).trim().toUpperCase());
+    for (const p of h.pedidos) vistos.add(String(p).trim());
+  }
+
+  const porCarga = {};
+  for (const pedido of Object.keys(planificado)) {
+    const d = planificado[pedido];
+    if (!d || !d.carga) continue;     // Paris
+    const c = porCarga[d.carga] || (porCarga[d.carga] = {
+      carga: d.carga, pedidos: 0, vistos: 0, rutas: new Set(), sinHoja: new Set() });
+    c.pedidos++;
+    if (vistos.has(String(pedido).trim())) c.vistos++;
+    const patente = String(d.patente || '').trim().toUpperCase();
+    c.rutas.add(`${d.ruta}-${patente}`);
+    if (patente && !conHoja.has(patente)) c.sinHoja.add(patente);
+  }
+
+  const sinActivar = [], aMedias = [], noEvaluadas = [];
+  for (const c of Object.values(porCarga)) {
+    const fila = { carga: c.carga, pedidos: c.pedidos, vistos: c.vistos,
+                   rutas: [...c.rutas].sort(), faltanHojas: [...c.sinHoja].sort() };
+    // Una carga puede repartirse entre varias rutas. Si falta la hoja de alguna de
+    // ellas no se puede afirmar nada: decir "no se activó" sería mentira, y ese falso
+    // positivo haría que la alerta se deje de leer a la semana.
+    if (fila.faltanHojas.length) { fila.estado = 'no_evaluada'; noEvaluadas.push(fila); }
+    else if (c.vistos === 0) { fila.estado = 'sin_activar'; sinActivar.push(fila); }
+    else if (c.vistos / c.pedidos < UMBRAL_A_MEDIAS) { fila.estado = 'a_medias'; aMedias.push(fila); }
+  }
+  const orden = (a, b) => b.pedidos - a.pedidos || a.carga.localeCompare(b.carga);
+  return { sinActivar: sinActivar.sort(orden), aMedias: aMedias.sort(orden),
+           noEvaluadas: noEvaluadas.sort(orden),
+           patentesSinHoja: [...new Set(noEvaluadas.flatMap(f => f.faltanHojas))].sort() };
+}
+
+// "Patente : VLGG66" en alguna de las primeras filas del Excel. Sin esto no se sabe
+// qué rutas vinieron y toda carga de una hoja no subida saldría como "no se activó".
+function patenteDeHoja(filas) {
+  for (const fila of (filas || []).slice(0, 12)) {
+    for (const celda of (fila || [])) {
+      const m = /^\s*patente\s*:\s*([A-Za-z0-9]+)/i.exec(String(celda || ''));
+      if (m) return m[1].toUpperCase();
+    }
+  }
+  return '';
+}
+/* ===== CRUCE-CARGAS-FIN ===== */
 
 // ── Paso 1: Cargar rendiciones desde GAS ──────────────────────
 async function cargarRendiciones() {
@@ -504,6 +569,18 @@ async function cargarRendiciones() {
     if (json.error) throw new Error(json.error);
     rendicionesMap = json.mapa || {};
     const total = json.total || Object.keys(rendicionesMap).length;
+
+    // En su propio try: marcar la columna Obs es el trabajo principal de esta página
+    // y no puede caerse porque el chequeo de cargas no cargue. Si queda vacío, el
+    // panel de cargas simplemente no aparece.
+    planificado = {};
+    try {
+      const rp = await fetch(url + '?action=planificado');
+      const jp = await rp.json();
+      if (!jp.error) planificado = jp.plan || {};
+    } catch (e) {
+      console.warn('No se pudo leer lo planificado: ' + e.message);
+    }
     const porPatente = {};
     Object.values(rendicionesMap).forEach(p => { porPatente[p] = (porPatente[p] || 0) + 1; });
     const patentes = Object.keys(porPatente).sort();
@@ -538,8 +615,9 @@ function agregarArchivos(fileList) {
     reader.onload = function(ev) {
       const rawData = new Uint8Array(ev.target.result);
       const wb = XLSX.read(rawData, { type: 'array' });
-      const pedidos = contarPedidos(wb);
-      archivos.push({ name: file.name, rawData, pedidos, resultData: null });
+      const { lista, patente } = leerHoja(wb);
+      archivos.push({ name: file.name, rawData, pedidos: lista.length, lista, patente,
+                      resultData: null });
       renderizarArchivos();
       actualizarBtnProcesar();
     };
@@ -547,16 +625,23 @@ function agregarArchivos(fileList) {
   });
 }
 
-function contarPedidos(wb) {
+// Los pedidos de la hoja y su patente. Antes sólo se contaban; ahora hace falta la
+// lista para saber qué carga no apareció, y la patente para saber qué rutas vinieron.
+function leerHoja(wb) {
   const ws = wb.Sheets[wb.SheetNames[0]];
   const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+  const patente = patenteDeHoja(rows);
   const hi = rows.findIndex(r => r.some(c => String(c).trim() === 'Pedido'));
-  if (hi === -1) return 0;
-  let count = 0;
+  if (hi === -1) return { lista: [], patente };
+  // Por nombre de columna y no por índice fijo: es lo que ya hace procesarExcel, y si
+  // hela mueve una columna las dos lecturas tienen que seguir coincidiendo.
+  const col = rows[hi].findIndex(c => String(c).trim() === 'Pedido');
+  const lista = [];
   for (let i = hi + 1; i < rows.length; i++) {
-    if (String(rows[i][1] || '').trim()) count++;
+    const p = String(rows[i][col] || '').trim();
+    if (p) lista.push(p);
   }
-  return count;
+  return { lista, patente };
 }
 
 function quitarArchivo(idx) {
@@ -612,8 +697,56 @@ async function procesarTodo() {
   document.getElementById('summaryText').innerHTML =
     `Procesado: <strong>${totalMarcadas}</strong> celda${totalMarcadas !== 1 ? 's' : ''} marcada${totalMarcadas !== 1 ? 's' : ''} en ${archivos.length} archivo${archivos.length !== 1 ? 's' : ''}`;
   document.getElementById('card3').classList.add('active');
+  revisarCargas();
   btn.disabled = false;
   btn.textContent = 'Procesar todo';
+}
+
+// ── Cargas que hela no activó ─────────────────────────────────
+function revisarCargas() {
+  const panel = document.getElementById('panelCargas');
+  if (Object.keys(planificado).length === 0) { panel.style.display = 'none'; return; }
+
+  const r = cruzarCargas(planificado, archivos.map(a => ({ patente: a.patente, pedidos: a.lista })));
+  const bloque = (titulo, filas, color, fondo) => filas.length === 0 ? '' : `
+    <div style="margin-top:10px;border-left:4px solid ${color};background:${fondo};padding:10px 14px;border-radius:6px;">
+      <div style="font-weight:600;color:${color};margin-bottom:6px;">${titulo}</div>
+      ${filas.map(f => `<div style="font-size:13px;margin:3px 0;">
+        <strong>${f.carga}</strong> · ${f.vistos} de ${f.pedidos} pedido${f.pedidos !== 1 ? 's' : ''} en las hojas
+        <span style="color:var(--text2);">· ${f.rutas.join(', ')}</span>
+        ${f.faltanHojas.length ? `<span style="color:var(--text2);"> · falta la hoja de ${f.faltanHojas.join(', ')}</span>` : ''}
+      </div>`).join('')}
+    </div>`;
+
+  panel.innerHTML =
+    bloque('🚨 No se activó en hela', r.sinActivar, '#c62828', '#fdecea') +
+    bloque('⚠️ Activada a medias', r.aMedias, '#b35c00', '#fff4e5') +
+    bloque('⚪ No evaluada — falta subir su hoja de ruta', r.noEvaluadas, '#5f6368', '#f1f3f4') +
+    (r.sinActivar.length || r.aMedias.length || r.noEvaluadas.length ? '' :
+      `<div style="font-size:13px;color:var(--text2);">✓ Todas las cargas planificadas aparecen en las hojas de ruta.</div>`);
+  panel.style.display = 'block';
+
+  const avisar = [...r.sinActivar, ...r.aMedias];
+  if (avisar.length) enviarAviso(avisar, panel);
+}
+
+async function enviarAviso(cargas, panel) {
+  const url = document.getElementById('gasUrl').value.trim();
+  const nota = document.createElement('div');
+  nota.style.cssText = 'font-size:12px;color:var(--text2);margin-top:8px;';
+  nota.textContent = 'Avisando al equipo…';
+  panel.appendChild(nota);
+  try {
+    // text/plain evita el preflight CORS: el GAS lee e.postData.contents igual.
+    const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ tipo: 'avisoCargas', cargas }) });
+    const j = await res.json();
+    nota.textContent = j.dedup ? '✓ Ya se había avisado hoy por estas cargas.'
+      : j.correo ? `✓ Correo enviado (${j.avisadas} carga/s).`
+      : '⚠ Registrado, pero sin correo: falta configurar ALERTA_CARGAS_TO en el Apps Script.';
+  } catch (e) {
+    nota.textContent = '⚠ No se pudo avisar por correo: ' + e.message + ' — el detalle igual está en pantalla.';
+  }
 }
 
 // ── Procesar Excel con JSZip (preserva formato 100%) ──────────
