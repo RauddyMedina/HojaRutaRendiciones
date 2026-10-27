@@ -711,7 +711,7 @@ function revisarCargas() {
   const bloque = (titulo, filas, color, fondo) => filas.length === 0 ? '' : `
     <div style="margin-top:10px;border-left:4px solid ${color};background:${fondo};padding:10px 14px;border-radius:6px;">
       <div style="font-weight:600;color:${color};margin-bottom:6px;">${titulo}</div>
-      ${filas.map(f => `<div style="font-size:13px;margin:3px 0;">
+      ${filas.map(f => `<div style="font-size:13px;margin:3px 0;color:var(--text);">
         <strong>${f.carga}</strong> · ${f.vistos} de ${f.pedidos} pedido${f.pedidos !== 1 ? 's' : ''} en las hojas
         <span style="color:var(--text2);">· ${f.rutas.join(', ')}</span>
         ${f.faltanHojas.length ? `<span style="color:var(--text2);"> · falta la hoja de ${f.faltanHojas.join(', ')}</span>` : ''}
@@ -719,9 +719,9 @@ function revisarCargas() {
     </div>`;
 
   panel.innerHTML =
-    bloque('🚨 No se activó en hela', r.sinActivar, '#c62828', '#fdecea') +
-    bloque('⚠️ Activada a medias', r.aMedias, '#b35c00', '#fff4e5') +
-    bloque('⚪ No evaluada — falta subir su hoja de ruta', r.noEvaluadas, '#5f6368', '#f1f3f4') +
+    bloque('🚨 No se activó en hela', r.sinActivar, 'var(--danger)', 'rgba(255,71,87,.12)') +
+    bloque('⚠️ Activada a medias', r.aMedias, 'var(--warning)', 'rgba(255,165,2,.12)') +
+    bloque('⚪ No evaluada — falta subir su hoja de ruta', r.noEvaluadas, 'var(--text2)', 'rgba(136,153,187,.10)') +
     (r.sinActivar.length || r.aMedias.length || r.noEvaluadas.length ? '' :
       `<div style="font-size:13px;color:var(--text2);">✓ Todas las cargas planificadas aparecen en las hojas de ruta.</div>`);
   panel.style.display = 'block';
