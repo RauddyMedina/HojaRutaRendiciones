@@ -565,14 +565,23 @@ function patenteDeHoja(filas) {
 // E-ANTHONY ZAPATA", "Firma : ______"— que cae en la columna Pedido y se contaba como
 // un pedido más: una hoja de 25 pedidos venía informando 27. Todos los pedidos reales
 // son números.
+//
+// Se limpia por los DOS lados a propósito: la marca hoy va al final, pero el 27-10-2026
+// estuvo unas horas yendo adelante ("!! 2919756235") y esas hojas ya están bajadas.
 function idPedido(celda) {
-  const s = String(celda == null ? '' : celda).replace(/^[!\s]+/, '').trim();
+  const s = String(celda == null ? '' : celda)
+    .replace(/^[!★☆\s]+/, '').replace(/[!★☆\s]+$/, '');
   return /^\d+$/.test(s) ? s : '';
 }
 
-// Qué marca le toca al pedido: '!!' si el compromiso ya venció, '!' si vence hoy, ''
+// Qué marca le toca al pedido: '★' si el compromiso ya venció, '☆' si vence hoy, ''
 // si va adelantado. Misma regla que tools/alerta_planificacion.py, donde lo vencido y
 // lo que vence hoy van primero.
+//
+// UN solo carácter, y va DESPUÉS del número. Con '!! ' adelante la celda pasaba de 12 a
+// 13 caracteres, no entraba en el ancho de la columna y Excel partía el renglón: el
+// número de entrega caía a una segunda línea y se leía mal, que es justo lo contrario
+// de lo que esta marca busca. Lleno = vencido, vacío = vence hoy.
 //
 // Se compara por TEXTO ISO y nunca con Date: new Date('2026-10-26') se interpreta como
 // medianoche UTC, que en Chile es el día ANTERIOR a las 21:00, y marcaría como atraso
@@ -580,8 +589,8 @@ function idPedido(celda) {
 // cronológicamente, comparar strings es correcto y además no depende del huso.
 function prioridadDe(fecha, hoy) {
   if (!fecha || !hoy) return '';
-  if (fecha < hoy) return '!!';
-  if (fecha === hoy) return '!';
+  if (fecha < hoy) return '★';
+  if (fecha === hoy) return '☆';
   return '';
 }
 
@@ -764,7 +773,7 @@ async function procesarTodo() {
   // en una versión vieja, porque la fecha de compromiso se agregó el 27-10-2026.
   let leyenda = '';
   if (totalUrgentes > 0) {
-    leyenda = ` · <strong>${totalUrgentes}</strong> con prioridad en el N° de entrega (<code>!!</code> atrasado, <code>!</code> vence hoy)`;
+    leyenda = ` · <strong>${totalUrgentes}</strong> con prioridad en el N° de entrega (<code>★</code> atrasado, <code>☆</code> vence hoy)`;
   } else if (Object.keys(planificado).length === 0) {
     leyenda = ` · <span style="color:var(--warning)">sin lo planificado: no se pudo marcar prioridad</span>`;
   } else if (!Object.values(planificado).some(d => d && d.fecha)) {
@@ -864,7 +873,7 @@ async function procesarExcel(rawData) {
     // uno nuevo, así que pintar exigiría meter mano en styles.xml.
     const marca = prioridadDe((planificado[pedido] || {}).fecha, hoy);
     if (marca) {
-      cellUpdates[`${pedidoColLetter}${excelRow}`] = `${marca} ${pedido}`;
+      cellUpdates[`${pedidoColLetter}${excelRow}`] = `${pedido} ${marca}`;
       urgentes++;
     }
   }
