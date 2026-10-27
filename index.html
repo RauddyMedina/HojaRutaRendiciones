@@ -488,7 +488,11 @@
 <script>
 // ── Estado global ──────────────────────────────────────────────
 let rendicionesMap = {};
-let planificado = {};     // pedido -> {carga, ruta, patente}
+let planificado = {};     // pedido -> {carga, ruta, patente, fecha}
+// action=mapa tarda ~1 s y action=planificado ~50 s. Sin este flag el botón Procesar
+// se habilitaba apenas llegaba el mapa, y si subías el Excel antes de que terminara el
+// plan procesabas SIN fechas: la prioridad quedaba sin marcar y parecía un bug.
+let cargandoPlan = false;
 let archivos = [];
 
 /* ===== CRUCE-CARGAS-INICIO (lo extrae test_cruce_cargas.js: no renombrar) ===== */
@@ -618,12 +622,17 @@ async function cargarRendiciones() {
     // y no puede caerse porque el chequeo de cargas no cargue. Si queda vacío, el
     // panel de cargas simplemente no aparece.
     planificado = {};
+    cargandoPlan = true;
+    actualizarBtnProcesar();        // por si ya soltaste archivos mientras cargaba
     try {
       const rp = await fetch(url + '?action=planificado');
       const jp = await rp.json();
       if (!jp.error) planificado = jp.plan || {};
+      else console.warn('El GAS devolvió error en planificado: ' + jp.error);
     } catch (e) {
       console.warn('No se pudo leer lo planificado: ' + e.message);
+    } finally {
+      cargandoPlan = false;         // en finally: si falla, el botón igual se libera
     }
     const porPatente = {};
     Object.values(rendicionesMap).forEach(p => { porPatente[p] = (porPatente[p] || 0) + 1; });
@@ -710,9 +719,16 @@ function renderizarArchivos() {
 
 // ── Paso 3: Procesar ──────────────────────────────────────────
 function actualizarBtnProcesar() {
+  const resumen = document.getElementById('summaryText');
+  if (cargandoPlan) {
+    document.getElementById('btnProcesar').disabled = true;
+    if (archivos.length) resumen.innerHTML =
+      `<strong>${archivos.length}</strong> archivo${archivos.length !== 1 ? 's' : ''} listo${archivos.length !== 1 ? 's' : ''} · esperando las fechas de compromiso…`;
+    return;
+  }
   const ok = Object.keys(rendicionesMap).length > 0 && archivos.length > 0;
   document.getElementById('btnProcesar').disabled = !ok;
-  if (ok) document.getElementById('summaryText').innerHTML =
+  if (ok) resumen.innerHTML =
     `<strong>${archivos.length}</strong> archivo${archivos.length !== 1 ? 's' : ''} listo${archivos.length !== 1 ? 's' : ''} · haz clic en <em>Procesar todo</em>`;
 }
 
