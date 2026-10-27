@@ -554,6 +554,41 @@ function patenteDeHoja(filas) {
 }
 /* ===== CRUCE-CARGAS-FIN ===== */
 
+/* ===== PRIORIDAD-INICIO (lo extrae test_prioridad.js: no renombrar) ===== */
+// El número de entrega tal cual hay que buscarlo: sin la marca de prioridad que esta
+// misma página pudo haberle puesto en una pasada anterior (si no, el pedido ya marcado
+// no cruza contra nada y pierde su RINDE), y sin el pie del Excel —"Driver : RUTA
+// E-ANTHONY ZAPATA", "Firma : ______"— que cae en la columna Pedido y se contaba como
+// un pedido más: una hoja de 25 pedidos venía informando 27. Todos los pedidos reales
+// son números.
+function idPedido(celda) {
+  const s = String(celda == null ? '' : celda).replace(/^[!\s]+/, '').trim();
+  return /^\d+$/.test(s) ? s : '';
+}
+
+// Qué marca le toca al pedido: '!!' si el compromiso ya venció, '!' si vence hoy, ''
+// si va adelantado. Misma regla que tools/alerta_planificacion.py, donde lo vencido y
+// lo que vence hoy van primero.
+//
+// Se compara por TEXTO ISO y nunca con Date: new Date('2026-10-26') se interpreta como
+// medianoche UTC, que en Chile es el día ANTERIOR a las 21:00, y marcaría como atraso
+// lo que vence mañana. Como 'YYYY-MM-DD' ordena igual alfabéticamente que
+// cronológicamente, comparar strings es correcto y además no depende del huso.
+function prioridadDe(fecha, hoy) {
+  if (!fecha || !hoy) return '';
+  if (fecha < hoy) return '!!';
+  if (fecha === hoy) return '!';
+  return '';
+}
+
+// La fecha de HOY en local. toISOString() sola daría UTC y en Chile adelanta el día
+// desde las 21:00, justo cuando se arman las rutas de mañana.
+function hoyISO() {
+  const d = new Date();
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+}
+/* ===== PRIORIDAD-FIN ===== */
+
 // ── Paso 1: Cargar rendiciones desde GAS ──────────────────────
 async function cargarRendiciones() {
   const url = document.getElementById('gasUrl').value.trim();
@@ -569,6 +604,15 @@ async function cargarRendiciones() {
     if (json.error) throw new Error(json.error);
     rendicionesMap = json.mapa || {};
     const total = json.total || Object.keys(rendicionesMap).length;
+
+    // Este pedido tarda ~50 s y no hay cómo acelerarlo: para traer la fecha de
+    // compromiso de cada pedido el Apps Script tiene que barrer las tres bases (WMS,
+    // Paris y OPL, 42 mil filas entre las tres). Se avisa en pantalla porque si no
+    // parece colgado. La pestaña PLANIFICACION DIARIA sería una lectura mucho más
+    // chica, pero se midió el 27-10 y sólo cubría 83 de 225 pedidos del plan.
+    mostrarStatus('statusRendiciones',
+      `✓ ${total} rendicion${total !== 1 ? 'es' : ''} · buscando las fechas de compromiso (tarda ~50 s)…`,
+      'loading');
 
     // En su propio try: marcar la columna Obs es el trabajo principal de esta página
     // y no puede caerse porque el chequeo de cargas no cargue. Si queda vacío, el
@@ -638,7 +682,7 @@ function leerHoja(wb) {
   const col = rows[hi].findIndex(c => String(c).trim() === 'Pedido');
   const lista = [];
   for (let i = hi + 1; i < rows.length; i++) {
-    const p = String(rows[i][col] || '').trim();
+    const p = idPedido(rows[i][col]);
     if (p) lista.push(p);
   }
   return { lista, patente };
@@ -678,24 +722,40 @@ async function procesarTodo() {
   btn.textContent = 'Procesando...';
   const resultList = document.getElementById('resultList');
   resultList.innerHTML = '';
-  let totalMarcadas = 0;
+  let totalMarcadas = 0, totalUrgentes = 0;
   for (let i = 0; i < archivos.length; i++) {
     const a = archivos[i];
-    const { resultData, marcadas } = await procesarExcel(a.rawData);
+    // urgentes = 0 por defecto: las salidas tempranas de procesarExcel no lo traen.
+    const { resultData, marcadas, urgentes = 0 } = await procesarExcel(a.rawData);
     a.resultData = resultData;
     totalMarcadas += marcadas;
-    const badgeClass = marcadas > 0 ? 'matched' : 'none';
-    const badgeText  = marcadas > 0 ? `${marcadas} marcada${marcadas !== 1 ? 's' : ''}` : 'sin rendiciones';
+    totalUrgentes += urgentes;
+    const hubo = marcadas > 0 || urgentes > 0;
+    const badgeClass = hubo ? 'matched' : 'none';
+    const badgeText = [marcadas > 0 ? `${marcadas} marcada${marcadas !== 1 ? 's' : ''}` : '',
+                       urgentes > 0 ? `${urgentes} prioridad` : '']
+                      .filter(Boolean).join(' · ') || 'sin rendiciones';
     resultList.insertAdjacentHTML('beforeend', `
       <div class="file-item" id="result-${i}">
-        <span class="file-icon">${marcadas > 0 ? '✅' : '📄'}</span>
+        <span class="file-icon">${hubo ? '✅' : '📄'}</span>
         <span class="file-name" title="${a.name}">${a.name}</span>
         <span class="file-badge ${badgeClass}">${badgeText}</span>
         <button class="btn-dl" onclick="descargar(${i})">⬇ Descargar</button>
       </div>`);
   }
+  // Cuando NO se marcó nada hay que decir por qué, que si no parece que no hubiera
+  // nada urgente. El caso del plan sin fechas es real: pasa si el Apps Script quedó
+  // en una versión vieja, porque la fecha de compromiso se agregó el 27-10-2026.
+  let leyenda = '';
+  if (totalUrgentes > 0) {
+    leyenda = ` · <strong>${totalUrgentes}</strong> con prioridad en el N° de entrega (<code>!!</code> atrasado, <code>!</code> vence hoy)`;
+  } else if (Object.keys(planificado).length === 0) {
+    leyenda = ` · <span style="color:var(--warning)">sin lo planificado: no se pudo marcar prioridad</span>`;
+  } else if (!Object.values(planificado).some(d => d && d.fecha)) {
+    leyenda = ` · <span style="color:var(--warning)">el plan vino sin fechas de compromiso: no se marcó prioridad</span>`;
+  }
   document.getElementById('summaryText').innerHTML =
-    `Procesado: <strong>${totalMarcadas}</strong> celda${totalMarcadas !== 1 ? 's' : ''} marcada${totalMarcadas !== 1 ? 's' : ''} en ${archivos.length} archivo${archivos.length !== 1 ? 's' : ''}`;
+    `Procesado: <strong>${totalMarcadas}</strong> celda${totalMarcadas !== 1 ? 's' : ''} marcada${totalMarcadas !== 1 ? 's' : ''} en ${archivos.length} archivo${archivos.length !== 1 ? 's' : ''}` + leyenda;
   document.getElementById('card3').classList.add('active');
   revisarCargas();
   btn.disabled = false;
@@ -766,21 +826,34 @@ async function procesarExcel(rawData) {
   const range = XLSX.utils.decode_range(ws['!ref'] || 'A1:Z200');
   const startCol = range.s.c;
   const startRow = range.s.r;
-  const obsColLetter = XLSX.utils.encode_col(startCol + colObs);
+  const obsColLetter    = XLSX.utils.encode_col(startCol + colObs);
+  const pedidoColLetter = XLSX.utils.encode_col(startCol + colPedido);
+  const hoy = hoyISO();
 
   const cellUpdates = {};
-  let marcadas = 0;
+  let marcadas = 0, urgentes = 0;
   for (let r = headerRowIdx + 1; r < rows.length; r++) {
-    const pedido = String(rows[r][colPedido] || '').trim();
+    const pedido = idPedido(rows[r][colPedido]);
     if (!pedido) continue;
-    const patente = rendicionesMap[pedido];
-    if (!patente) continue;
     const excelRow = startRow + r + 1;
-    cellUpdates[`${obsColLetter}${excelRow}`] = `RINDE ${patente}`;
-    marcadas++;
+    const patente = rendicionesMap[pedido];
+    if (patente) {
+      cellUpdates[`${obsColLetter}${excelRow}`] = `RINDE ${patente}`;
+      marcadas++;
+    }
+    // La prioridad se escribe SOBRE el número de entrega, que es la columna que el
+    // conductor ya viene leyendo. Va como texto y no como color de celda a propósito:
+    // la hoja de ruta se imprime, y en una impresora en blanco y negro un relleno de
+    // color no existe. Además aplicarCambios() conserva el estilo pero no sabe crear
+    // uno nuevo, así que pintar exigiría meter mano en styles.xml.
+    const marca = prioridadDe((planificado[pedido] || {}).fecha, hoy);
+    if (marca) {
+      cellUpdates[`${pedidoColLetter}${excelRow}`] = `${marca} ${pedido}`;
+      urgentes++;
+    }
   }
 
-  if (marcadas === 0) return { resultData: rawData, marcadas: 0 };
+  if (marcadas === 0 && urgentes === 0) return { resultData: rawData, marcadas: 0 };
 
   const zip = await JSZip.loadAsync(rawData);
   const wsPath = await detectarWsPath(zip);
@@ -791,7 +864,7 @@ async function procesarExcel(rawData) {
   zip.file(wsPath, xmlMod);
 
   const resultBuffer = await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE', compressionOptions: { level: 6 } });
-  return { resultData: resultBuffer, marcadas };
+  return { resultData: resultBuffer, marcadas, urgentes };
 }
 
 // ── Detecta la ruta real del primer worksheet ─────────────────
